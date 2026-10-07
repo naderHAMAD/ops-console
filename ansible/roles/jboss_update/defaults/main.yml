@@ -1,0 +1,4 @@
+---
+# Peuvent être surchargées via extra_vars envoyées par AWX (target_hostname, target_version)
+target_version: "{{ target_version | default('7.4.0') }}"
+jboss_artifact_name: "jboss-eap-{{ target_version }}.zip"

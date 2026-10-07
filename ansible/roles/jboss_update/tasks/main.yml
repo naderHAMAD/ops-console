@@ -1,0 +1,127 @@
+---
+# Rôle jboss_update
+# Enchaîne : lecture de la version actuelle -> backup -> arrêt -> déploiement
+# -> démarrage -> health check -> rollback automatique en cas d'échec.
+
+- name: Créer le dossier de backup s'il n'existe pas
+  ansible.builtin.file:
+    path: "{{ backup_root }}/{{ inventory_hostname }}"
+    state: directory
+    owner: "{{ jboss_instance_user }}"
+    mode: "0750"
+
+- name: Relever la version JBoss actuellement installée
+  ansible.builtin.command: "cat {{ jboss_home }}/version.txt"
+  register: current_version
+  changed_when: false
+  failed_when: false
+
+- name: Définir un horodatage de backup unique
+  ansible.builtin.set_fact:
+    backup_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+- name: Bloc principal de mise à jour avec rollback automatique
+  block:
+
+    - name: Sauvegarder l'installation JBoss actuelle
+      ansible.builtin.archive:
+        path: "{{ jboss_home }}"
+        dest: "{{ backup_root }}/{{ inventory_hostname }}/backup-{{ backup_timestamp }}.tar.gz"
+        format: gz
+
+    - name: Arrêter le service JBoss
+      ansible.builtin.systemd:
+        name: "{{ jboss_service_name }}"
+        state: stopped
+
+    - name: Télécharger le nouvel artefact JBoss
+      ansible.builtin.get_url:
+        url: "{{ artifact_repository_url }}/{{ jboss_artifact_name }}"
+        dest: "/tmp/{{ jboss_artifact_name }}"
+        url_username: "{{ vault_artifact_repo_user }}"
+        url_password: "{{ vault_artifact_repo_password }}"
+        mode: "0640"
+
+    - name: Déployer le nouvel artefact (remplace le contenu de jboss_home)
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ jboss_artifact_name }}"
+        dest: "{{ jboss_home }}"
+        remote_src: true
+        owner: "{{ jboss_instance_user }}"
+        extra_opts: [--strip-components=1]
+
+    - name: Enregistrer la nouvelle version installée
+      ansible.builtin.copy:
+        content: "{{ target_version }}"
+        dest: "{{ jboss_home }}/version.txt"
+        owner: "{{ jboss_instance_user }}"
+
+    - name: Démarrer le service JBoss avec la nouvelle version
+      ansible.builtin.systemd:
+        name: "{{ jboss_service_name }}"
+        state: started
+
+    - name: Attendre que le endpoint de santé JBoss réponde
+      ansible.builtin.uri:
+        url: "{{ jboss_health_endpoint }}"
+        status_code: 200
+        timeout: 5
+      register: health_result
+      retries: "{{ health_check_retries }}"
+      delay: "{{ health_check_delay }}"
+      until: health_result.status == 200
+
+    - name: Marquer le déploiement comme réussi
+      ansible.builtin.debug:
+        msg: "Mise à jour réussie sur {{ inventory_hostname }} vers {{ target_version }}"
+
+  rescue:
+
+    - name: "ROLLBACK — le health check a échoué, restauration de la sauvegarde"
+      ansible.builtin.debug:
+        msg: "Échec détecté sur {{ inventory_hostname }}, déclenchement du rollback"
+
+    - name: Arrêter le service avant restauration
+      ansible.builtin.systemd:
+        name: "{{ jboss_service_name }}"
+        state: stopped
+      failed_when: false
+
+    - name: Vider le dossier jboss_home avant restauration
+      ansible.builtin.file:
+        path: "{{ jboss_home }}"
+        state: absent
+
+    - name: Recréer le dossier jboss_home
+      ansible.builtin.file:
+        path: "{{ jboss_home }}"
+        state: directory
+        owner: "{{ jboss_instance_user }}"
+
+    - name: Restaurer la sauvegarde précédente
+      ansible.builtin.unarchive:
+        src: "{{ backup_root }}/{{ inventory_hostname }}/backup-{{ backup_timestamp }}.tar.gz"
+        dest: "{{ jboss_home }}"
+        remote_src: true
+        owner: "{{ jboss_instance_user }}"
+
+    - name: Redémarrer le service avec la version restaurée
+      ansible.builtin.systemd:
+        name: "{{ jboss_service_name }}"
+        state: started
+
+    - name: Vérifier que le rollback a bien restauré un service fonctionnel
+      ansible.builtin.uri:
+        url: "{{ jboss_health_endpoint }}"
+        status_code: 200
+        timeout: 5
+      register: rollback_health
+      retries: "{{ health_check_retries }}"
+      delay: "{{ health_check_delay }}"
+      until: rollback_health.status == 200
+
+    - name: Faire échouer explicitement le job (visible côté AWX/backend)
+      ansible.builtin.fail:
+        msg: >
+          Mise à jour vers {{ target_version }} échouée sur {{ inventory_hostname }}.
+          Rollback effectué avec succès vers la version précédente.
