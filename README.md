@@ -20,11 +20,7 @@ npm start
 # App disponible sur http://localhost:4200
 ```
 
-## Comptes par défaut
 
-Un compte Super Admin est créé par la migration Flyway V2 :
-- Email : `admin@steg.tn`
-- Mot de passe : `ChangeMe123!` — **à changer immédiatement après la première connexion**
 
 ## AWX (Ansible Automation Platform)
 
