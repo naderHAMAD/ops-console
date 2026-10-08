@@ -42,6 +42,12 @@ Une fois AWX opérationnel :
 - `frontend/` — Angular 18 standalone (dashboard, update JBoss, VM, gestion utilisateurs)
 - `docker-compose.yml` — Postgres, pgAdmin, RabbitMQ, backend, frontend
 
+## Comptes par défaut
+
+Un compte Super Admin est créé par la migration Flyway V2 :
+- Email : `admin@steg.tn`
+- Mot de passe : `ChangeMe123!` — **à changer immédiatement après la première connexion**
+
 ## Prochaines étapes suggérées
 
 - Écrire les playbooks Ansible réels (`update_jboss.yml`, `create_vm.yml`) et les
